@@ -1,0 +1,105 @@
+# Compose / Podman specification for internal deployment
+# Enforces outbound blocking, non-root execution, and isolated internal networks.
+
+services:
+  reverse-proxy:
+    image: nginx:1.27-alpine
+    container_name: intranet-reverse-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    networks:
+      - egress_allowed
+      - internal_app
+    depends_on:
+      app:
+        condition: service_healthy
+
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: intranet-assistant-app
+    restart: unless-stopped
+    environment:
+      - APP_ENV=production
+      - DEBUG=false
+      - HOST=0.0.0.0
+      - PORT=8000
+      - SECRET_KEY=${SECRET_KEY}
+      - ENABLE_DEVELOPMENT_AUTH=false
+      - AUTH_MODE=oidc
+      - AUTH_AUDIENCE=enterprise-intranet-assistant
+      - OIDC_ISSUER=${OIDC_ISSUER}
+      - OIDC_JWKS_URL=${OIDC_JWKS_URL}
+      - ROLE_PERMISSION_MAP=${ROLE_PERMISSION_MAP}
+      - AUDIT_LOG_PATH=/var/log/app/audit.jsonl
+      - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_READ_ONLY=true
+      - LLM_ENABLED=true
+      - LLM_BASE_URL=http://llm-service:8000/v1
+      - LLM_ALLOWED_HOSTS=["llm-service"]
+      - LLM_MODEL=${LLM_MODEL:-qwen3-4b-reviewed}
+      - LLM_INTERNAL_ONLY=true
+      - DOCUMENT_ROOTS=["/data/documents"]
+    volumes:
+      - audit_data:/var/log/app
+      - ${DOCUMENT_STORAGE_PATH:-./sample_docs}:/data/documents:ro
+    networks:
+      - internal_app
+      - isolated_backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health/live"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    read_only: false
+    tmpfs:
+      - /tmp
+
+  llm-service:
+    # Staged internal inference engine (vLLM / llama.cpp server)
+    # Never downloads models at startup; model weights are mounted read-only.
+    image: ${INTERNAL_REGISTRY:-internal-registry.local}/vllm-openai:v0.6.3
+    container_name: intranet-llm-service
+    restart: unless-stopped
+    command: >
+      --model /models/approved-model
+      --host 0.0.0.0
+      --port 8000
+      --max-model-len 4096
+      --disable-log-requests
+    volumes:
+      - ${INTERNAL_MODEL_PATH:-./models}:/models:ro
+    networks:
+      - isolated_backend
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+networks:
+  # Network connected to reverse proxy for incoming requests
+  egress_allowed:
+    driver: bridge
+  # Internal network between proxy and FastAPI app
+  internal_app:
+    driver: bridge
+    internal: true
+  # Strictly air-gapped network between FastAPI and inference server.
+  # "internal: true" blocks all default routing to the external internet.
+  isolated_backend:
+    driver: bridge
+    internal: true
+
+volumes:
+  audit_data:

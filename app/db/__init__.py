@@ -1,0 +1,1 @@
+"""Approved-query database integration."""
