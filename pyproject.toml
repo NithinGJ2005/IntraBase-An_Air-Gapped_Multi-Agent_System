@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=75.0,<76.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "enterprise-intranet-assistant"
+version = "0.1.0"
+description = "Secure, self-hosted enterprise intranet AI assistant"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "fastapi==0.115.6",
+  "httpx==0.28.1",
+  "langchain-core==1.6.10",
+  "langgraph==1.2.15",
+  "PyJWT[crypto]==2.10.1",
+  "pydantic-settings==2.7.1",
+  "PyMuPDF==1.25.1",
+  "SQLAlchemy==2.0.36",
+  "uvicorn[standard]==0.34.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.3.4",
+  "pytest-asyncio==0.25.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
